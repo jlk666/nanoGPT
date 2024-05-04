@@ -339,11 +339,12 @@ while True:
     if iter_num > max_iters:
         break
 
+    embed_head_ratio = n_embd / n_head
     plt.figure(figsize=(10, 5))
     plt.plot(iteration_nums, losses_l, label='Training Loss')
     plt.xlabel('Iteration Number')
     plt.ylabel('Loss')
-    plt.title('Training Loss over Iterations')
+    plt.title(f'Training Loss over Iterations (Embed/Head Ratio: {embed_head_ratio:.2f})')
     plt.legend()
     plt.grid(True)
     plt.savefig(f"{out_dir}/final_loss_plot.png")
