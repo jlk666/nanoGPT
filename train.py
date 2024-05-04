@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+import matplotlib.pyplot as plt
 
 from model import GPTConfig, GPT
 
@@ -247,6 +248,9 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
+iteration_nums = []
+losses_l = []
+
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
@@ -325,12 +329,27 @@ while True:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        iteration_nums.append(iter_num)
+        losses_l.append(lossf)
+
     iter_num += 1
     local_iter_num += 1
 
     # termination conditions
     if iter_num > max_iters:
         break
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(iteration_nums, losses_l, label='Training Loss')
+    plt.xlabel('Iteration Number')
+    plt.ylabel('Loss')
+    plt.title('Training Loss over Iterations')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f"{out_dir}/final_loss_plot.png")
+    plt.close()
+
+
 
 if ddp:
     destroy_process_group()
