@@ -53,6 +53,7 @@ block_size = 1024
 n_layer = 12
 n_head = 12
 n_embd = 768
+interest_ratio = 64
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
@@ -146,7 +147,7 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, interest_ratio=interest_ratio) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -347,7 +348,8 @@ while True:
     plt.title(f'Training Loss over Iterations (Embed/Head Ratio: {embed_head_ratio:.2f})')
     plt.legend()
     plt.grid(True)
-    plt.savefig(f"{out_dir}/final_loss_plot.png")
+    filename = f"{out_dir}/final_loss_plot_embed_head_ratio_{embed_head_ratio:.2f}.png"
+    plt.savefig(filename)
     plt.close()
 
 

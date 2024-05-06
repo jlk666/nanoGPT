@@ -31,8 +31,11 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
+        self.interested_ratio = config.interest_ratio
+        self.shrinkingScalor = config.n_embd//config.n_head//self.interested_ratio
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.c_attn = nn.Linear(config.n_embd, 2 * config.n_embd//(self.shrinkingScalor) + config.n_embd, bias=config.bias)
+            
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
@@ -50,13 +53,15 @@ class CausalSelfAttention(nn.Module):
                                         .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split([self.n_embd//self.shrinkingScalor, self.n_embd//self.shrinkingScalor, self.n_embd], dim=2)
+        k = k.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -74,6 +79,12 @@ class CausalSelfAttention(nn.Module):
         # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
+        
+    def create_sliding_window_mask(self, block_size, window_size=100):
+        # Ensures that each position can only attend to the last 'window_size' positions up to and including itself
+        mask = torch.ones(block_size, block_size)
+        mask = torch.tril(mask, 0) - torch.tril(mask, -window_size)
+        return mask.view(1, 1, block_size, block_size)
 
 class MLP(nn.Module):
 
@@ -113,6 +124,8 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     dropout: float = 0.0
+    interest_ratio: int = 64
+
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
 class GPT(nn.Module):
