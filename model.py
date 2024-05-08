@@ -32,10 +32,12 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         self.interested_ratio = config.interest_ratio
+        self.sliding_window = config.sliding_window
+        self.sliding_window_size = config.sliding_window_size
         self.shrinkingScalor = config.n_embd//config.n_head//self.interested_ratio
         # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 2 * config.n_embd//(self.shrinkingScalor) + config.n_embd, bias=config.bias)
-            
+        self.window_size = 10
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
@@ -61,12 +63,20 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-
-
+        
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            if self.sliding_window == True:
+                # Create masks for blocking out-of-window attention
+                attn_mask = torch.full((T, T), float('inf'), device=x.device)
+                attn_mask = torch.tril(attn_mask.fill_(1))
+                attn_mask = self.create_sliding_window_mask(attn_mask, self.sliding_window_size)
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
+            else:
+                # efficient attention using Flash Attention CUDA kernels
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+                
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -80,11 +90,16 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y
         
-    def create_sliding_window_mask(self, block_size, window_size=100):
-        # Ensures that each position can only attend to the last 'window_size' positions up to and including itself
-        mask = torch.ones(block_size, block_size)
-        mask = torch.tril(mask, 0) - torch.tril(mask, -window_size)
-        return mask.view(1, 1, block_size, block_size)
+    def create_sliding_window_mask(self, matrix, k):
+        n = matrix.size(0)
+        mask = matrix.clone()
+        
+        for i in range(n):
+            for j in range(n):
+                if i - j > k:
+                    mask[i, j] = 0
+        mask[mask == 0] = float('-inf')
+        return mask
 
 class MLP(nn.Module):
 
@@ -125,6 +140,8 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     interest_ratio: int = 64
+    sliding_window: bool = False
+    sliding_window_size: int = 100
 
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 

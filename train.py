@@ -54,6 +54,8 @@ n_layer = 12
 n_head = 12
 n_embd = 768
 interest_ratio = 64
+sliding_window = False
+sliding_window_size = 3
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
@@ -147,7 +149,7 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, interest_ratio=interest_ratio) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, interest_ratio=interest_ratio, sliding_window=sliding_window, sliding_window_size=sliding_window_size) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
