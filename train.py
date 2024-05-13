@@ -30,13 +30,14 @@ import matplotlib.pyplot as plt
 
 from model import GPTConfig, GPT
 
+import csv
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 out_dir = 'out'
-eval_interval = 2000
+eval_interval = 2
 log_interval = 1
-eval_iters = 200
+eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -56,6 +57,9 @@ n_embd = 768
 interest_ratio = 64
 sliding_window = False
 sliding_window_size = 3
+revisedMLP = False
+register_token = 0
+question_number = 0
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
@@ -81,7 +85,6 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
-
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
 if ddp:
@@ -149,7 +152,7 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, interest_ratio=interest_ratio, sliding_window=sliding_window, sliding_window_size=sliding_window_size) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, interest_ratio=interest_ratio, sliding_window=sliding_window, sliding_window_size=sliding_window_size, revisedMLP = revisedMLP, register_token = register_token, question_number = question_number) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -245,6 +248,61 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
+
+def plot_losses_sliding_window_size(iteration_nums, losses_train, losses_val, sliding_window_size, out_dir):
+    plt.figure(figsize=(10, 5))
+    plt.plot(iteration_nums, losses_train, label='Training Loss')
+    plt.plot(iteration_nums, losses_val, label='Validation Loss')
+    plt.xlabel('Iteration Number')
+    plt.ylabel('Loss')
+    plt.title(f'Training and Validation Losses over Iterations (sliding_window_size: {sliding_window_size:.2f})')
+    plt.legend()
+    plt.grid(True)
+    plt.ylim(0, 5)
+    filename = f"{out_dir}/loss_plot_sliding_window_size_{sliding_window_size:.2f}.png"
+    plt.savefig(filename)
+    plt.close()
+
+def plot_losses_MLP(iteration_nums, losses_train, losses_val, revisedMLP, out_dir):
+    plt.figure(figsize=(10, 5))
+    plt.plot(iteration_nums, losses_train, label='Training Loss')
+    plt.plot(iteration_nums, losses_val, label='Validation Loss')
+    plt.xlabel('Iteration Number')
+    plt.ylabel('Loss')
+
+    # Check if the revised MLP is being used and adjust title and filename accordingly
+    if revisedMLP:
+        title = "Training and Validation Losses over Iterations (Revised MLP)"
+        filename_suffix = "revised_MLP"
+    else:
+        title = "Training and Validation Losses over Iterations (Normal MLP)"
+        filename_suffix = "normal_MLP"
+    
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.ylim(0, 5)
+    filename = f"{out_dir}/loss_plot_{filename_suffix}.png"
+    plt.savefig(filename)
+    plt.close()
+
+def plot_losses_register_token(iteration_nums, losses_train, losses_val, num_register_tokens, out_dir):
+    plt.figure(figsize=(10, 5))
+    plt.plot(iteration_nums, losses_train, label='Training Loss')
+    plt.plot(iteration_nums, losses_val, label='Validation Loss')
+    plt.xlabel('Iteration Number')
+    plt.ylabel('Loss')
+    plt.ylim(0, 5)
+    # Update the plot title and filename to reflect the number of register tokens used
+    title = f"Training and Validation Losses with {num_register_tokens} Register Tokens"
+    filename = f"{out_dir}/loss_plot_{num_register_tokens}_register_tokens.png"
+
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(filename)
+    plt.close()
+
 # logging
 if wandb_log and master_process:
     import wandb
@@ -252,7 +310,13 @@ if wandb_log and master_process:
 
 # training loop
 iteration_nums = []
-losses_l = []
+losses_train = []
+losses_val = []
+
+if question_number == 1:
+    csv_file_path = 'losses_data_q1.csv'
+if question_number == 2:
+    csv_file_path = 'losses_data_q2.csv'
 
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
@@ -268,7 +332,38 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
+        iteration_nums.append(iter_num)
         losses = estimate_loss()
+        losses_train.append(losses['train'])
+        losses_val.append(losses['val'])
+        if question_number == 1:
+            data = zip([str(interest_ratio)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
+        if question_number == 2:
+            data = zip([str(sliding_window_size)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
+        
+
+
+        # Check if the CSV file exists
+        file_exists = os.path.exists(csv_file_path)
+
+        # Open the CSV file in append mode ('a+') and create it if it doesn't exist
+        with open(csv_file_path, mode='a+', newline='') as file:
+            writer = csv.writer(file)
+            
+            #CSV accumulated data for questions 1
+            if question_number == 1:
+                first_column = 'Interest Ratio'
+            if  question_number == 2:
+                first_column = 'Sliding window size'
+
+            if not file_exists:
+                writer.writerow([first_column, 'Iteration Number', 'Training Loss', 'Validation Loss'])
+            # Write the data row by row
+            for row in data:
+                writer.writerow(row)
+
+        print(f"CSV file saved successfully at: {csv_file_path}")
+        
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
@@ -332,8 +427,7 @@ while True:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        iteration_nums.append(iter_num)
-        losses_l.append(lossf)
+        
 
     iter_num += 1
     local_iter_num += 1
@@ -341,19 +435,11 @@ while True:
     # termination conditions
     if iter_num > max_iters:
         break
+    
 
-    embed_head_ratio = n_embd / n_head
-    plt.figure(figsize=(10, 5))
-    plt.plot(iteration_nums, losses_l, label='Training Loss')
-    plt.xlabel('Iteration Number')
-    plt.ylabel('Loss')
-    plt.title(f'Training Loss over Iterations (Embed/Head Ratio: {embed_head_ratio:.2f})')
-    plt.legend()
-    plt.grid(True)
-    filename = f"{out_dir}/final_loss_plot_embed_head_ratio_{embed_head_ratio:.2f}.png"
-    plt.savefig(filename)
-    plt.close()
+    
 
+    
 
 
 if ddp:

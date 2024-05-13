@@ -36,7 +36,10 @@ class CausalSelfAttention(nn.Module):
         self.sliding_window_size = config.sliding_window_size
         self.shrinkingScalor = config.n_embd//config.n_head//self.interested_ratio
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 2 * config.n_embd//(self.shrinkingScalor) + config.n_embd, bias=config.bias)
+        if config.question_number == 1:
+            self.c_attn = nn.Linear(config.n_embd, 2 * config.n_embd//(self.shrinkingScalor) + config.n_embd, bias=config.bias)
+        else: 
+            self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         self.window_size = 10
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
@@ -46,6 +49,8 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.blocksize = config.block_size
+        self.question = config.question_number
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -55,14 +60,23 @@ class CausalSelfAttention(nn.Module):
                                         .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
+        if self.question == 1:
+            B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+            # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+            qkv = self.c_attn(x)
+            q, k, v = qkv.split([self.n_embd//self.shrinkingScalor, self.n_embd//self.shrinkingScalor, self.n_embd], dim=2)
+            k = k.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
+            q = q.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
+            v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        else:
+            B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        qkv = self.c_attn(x)
-        q, k, v = qkv.split([self.n_embd//self.shrinkingScalor, self.n_embd//self.shrinkingScalor, self.n_embd], dim=2)
-        k = k.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, self.interested_ratio).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+            # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+            q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+            k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+            q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+            v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
         
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -76,6 +90,7 @@ class CausalSelfAttention(nn.Module):
             else:
                 # efficient attention using Flash Attention CUDA kernels
                 y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+                #print("here")
                 
         else:
             # manual implementation of attention
@@ -109,11 +124,19 @@ class MLP(nn.Module):
         self.gelu    = nn.GELU()
         self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
+        self.revisedMLP = config.revisedMLP
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
+        if not self.revisedMLP: #if revisedMLP set to false, then this is default sourcecode MLP structure
+            x = self.c_fc(x)
+            x = self.gelu(x)
+            x = self.c_proj(x)
+        else:
+            x1 = self.c_fc(x)  # First linear transformation
+            x2 = self.c_fc(x)  # Second linear transformation for gating
+            x = self.gelu(x1) * x2  # Element-wise product
+            x = self.c_proj(self.gelu(x))  # Additional transformation after gating
+
         x = self.dropout(x)
         return x
 
@@ -125,16 +148,19 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
+        self.blocksize = config.block_size
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
+        x = x[:, :self.blocksize, :]  
         return x
 
 @dataclass
 class GPTConfig:
+    
     block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
@@ -142,7 +168,9 @@ class GPTConfig:
     interest_ratio: int = 64
     sliding_window: bool = False
     sliding_window_size: int = 100
-
+    revisedMLP: bool = False
+    register_token: int = 0
+    question_number: int = 0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
 class GPT(nn.Module):
@@ -155,7 +183,7 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size + config.register_token, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
@@ -198,22 +226,37 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
+        #print("Input idx size:", idx.size())  # Confirm actual input size
+        
+        #print("Position embedding size:", self.transformer.wpe.weight.size())  # Confirm position embedding size
+        register_tokens = torch.randn(12, self.config.register_token)
+        register_tokens = register_tokens.to(torch.long)
+        register_tokens = register_tokens.to(idx.device)
+        idx = torch.cat((idx, register_tokens), dim=1)
+        #print(idx.size())
         device = idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        assert t <= self.config.block_size+self.config.register_token, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-
+        
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        
+        #print("Token embedding size:", self.transformer.wte.weight.size())  # Confirm token embedding size
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        #print(pos_emb.size())
         x = self.transformer.drop(tok_emb + pos_emb)
+       
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
-
+        
         if targets is not None:
             # if we are given some desired targets also calculate the loss
+            #print(x.size())
             logits = self.lm_head(x)
+            #print("below")
+            #print(logits.size())
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
