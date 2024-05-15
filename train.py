@@ -248,61 +248,6 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
-
-def plot_losses_sliding_window_size(iteration_nums, losses_train, losses_val, sliding_window_size, out_dir):
-    plt.figure(figsize=(10, 5))
-    plt.plot(iteration_nums, losses_train, label='Training Loss')
-    plt.plot(iteration_nums, losses_val, label='Validation Loss')
-    plt.xlabel('Iteration Number')
-    plt.ylabel('Loss')
-    plt.title(f'Training and Validation Losses over Iterations (sliding_window_size: {sliding_window_size:.2f})')
-    plt.legend()
-    plt.grid(True)
-    plt.ylim(0, 5)
-    filename = f"{out_dir}/loss_plot_sliding_window_size_{sliding_window_size:.2f}.png"
-    plt.savefig(filename)
-    plt.close()
-
-def plot_losses_MLP(iteration_nums, losses_train, losses_val, revisedMLP, out_dir):
-    plt.figure(figsize=(10, 5))
-    plt.plot(iteration_nums, losses_train, label='Training Loss')
-    plt.plot(iteration_nums, losses_val, label='Validation Loss')
-    plt.xlabel('Iteration Number')
-    plt.ylabel('Loss')
-
-    # Check if the revised MLP is being used and adjust title and filename accordingly
-    if revisedMLP:
-        title = "Training and Validation Losses over Iterations (Revised MLP)"
-        filename_suffix = "revised_MLP"
-    else:
-        title = "Training and Validation Losses over Iterations (Normal MLP)"
-        filename_suffix = "normal_MLP"
-    
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    plt.ylim(0, 5)
-    filename = f"{out_dir}/loss_plot_{filename_suffix}.png"
-    plt.savefig(filename)
-    plt.close()
-
-def plot_losses_register_token(iteration_nums, losses_train, losses_val, num_register_tokens, out_dir):
-    plt.figure(figsize=(10, 5))
-    plt.plot(iteration_nums, losses_train, label='Training Loss')
-    plt.plot(iteration_nums, losses_val, label='Validation Loss')
-    plt.xlabel('Iteration Number')
-    plt.ylabel('Loss')
-    plt.ylim(0, 5)
-    # Update the plot title and filename to reflect the number of register tokens used
-    title = f"Training and Validation Losses with {num_register_tokens} Register Tokens"
-    filename = f"{out_dir}/loss_plot_{num_register_tokens}_register_tokens.png"
-
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(filename)
-    plt.close()
-
 # logging
 if wandb_log and master_process:
     import wandb
@@ -317,7 +262,11 @@ if question_number == 1:
     csv_file_path = 'losses_data_q1.csv'
 if question_number == 2:
     csv_file_path = 'losses_data_q2.csv'
-
+if question_number == 4:
+    csv_file_path = 'losses_data_q4.csv'
+if question_number == 45 or question_number == 25 or question_number == 5:
+    csv_file_path = 'losses_data_q5.csv'
+    
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
@@ -340,6 +289,13 @@ while True:
             data = zip([str(interest_ratio)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
         if question_number == 2:
             data = zip([str(sliding_window_size)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
+        if question_number == 4:
+            data = zip([str(register_token)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
+        if question_number == 45 or question_number == 25 or question_number == 5:
+            test_info = str(sliding_window_size)+str(register_token)
+            data = zip([str(test_info)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
+            
+        
         
 
 
@@ -355,6 +311,10 @@ while True:
                 first_column = 'Interest Ratio'
             if  question_number == 2:
                 first_column = 'Sliding window size'
+            if  question_number == 4:
+                first_column = 'Register token number'
+            if question_number == 45 or question_number == 25 or question_number == 5:
+                first_column = 'Tested condition'
 
             if not file_exists:
                 writer.writerow([first_column, 'Iteration Number', 'Training Loss', 'Validation Loss'])
