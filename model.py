@@ -32,9 +32,9 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         self.interested_ratio = config.interest_ratio
+        self.shrinkingScalor = config.n_embd//config.n_head//self.interested_ratio
         self.sliding_window = config.sliding_window
         self.sliding_window_size = config.sliding_window_size
-        self.shrinkingScalor = config.n_embd//config.n_head//self.interested_ratio
         # key, query, value projections for all heads, but in a batch
         if config.question_number == 1:
             self.c_attn = nn.Linear(config.n_embd, 2 * config.n_embd//(self.shrinkingScalor) + config.n_embd, bias=config.bias)
@@ -53,7 +53,10 @@ class CausalSelfAttention(nn.Module):
         self.question = config.question_number
         self.register_token_num = config.register_token
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if config.question_number == 61:
+            self.flash = False
+        else:
+            self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
@@ -104,15 +107,22 @@ class CausalSelfAttention(nn.Module):
             else:
                 # efficient attention using Flash Attention CUDA kernels
                 y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
-                #print("here")
                 
         else:
             # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            if self.question == 61:
+                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                att = att.masked_fill(self.bias[:, :, :T, :T] == 0, 0.0) #mask set to 0 to avoid nan calculated in the loss
+                att = self.custom_softmax(att, dim=-1)
+                att = self.attn_dropout(att)
+                y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+                
+            else:
+                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+                att = F.softmax(att, dim=-1)
+                att = self.attn_dropout(att)
+                y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
@@ -139,6 +149,16 @@ class CausalSelfAttention(nn.Module):
         matrix[matrix == 0] = float('-inf')      # Set those 0s to -inf
 
         return matrix
+    
+    def normalize(self, tensor):
+        # Normalize each column by its l1 norm
+        norm = torch.norm(tensor, p=1, dim=-2, keepdim=True)
+        return tensor / norm
+    
+    def custom_softmax(self, x, dim=-1):
+        abs_x = torch.abs(x)
+        eps = 1e-12  
+        return abs_x / (torch.sum(abs_x, dim=dim, keepdim=True) + eps)
     
 
     def create_sliding_window_mask_register(self, slide_window_mask, register_number):
@@ -181,9 +201,9 @@ class MLP(nn.Module):
             x = self.c_proj(x)
         else:
             x1 = self.c_fc(x)  # First linear transformation
-            x2 = self.c_fc(x)  # Second linear transformation for gating
+            x2 = self.c_fc(x)  # Second linear transformation
             x = self.gelu(x1) * x2  # Element-wise product
-            x = self.c_proj(self.gelu(x))  # Additional transformation after gating
+            x = self.c_proj(self.gelu(x))  # Additional transformation 
 
         x = self.dropout(x)
         return x
@@ -274,14 +294,10 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
-        #print("Input idx size:", idx.size())  # Confirm actual input size
-        
-        #print("Position embedding size:", self.transformer.wpe.weight.size())  # Confirm position embedding size
         register_tokens = torch.randn(12, self.config.register_token)
         register_tokens = register_tokens.to(torch.long)
         register_tokens = register_tokens.to(idx.device)
         idx = torch.cat((register_tokens, idx), dim=1) # prepend register token at the begining of idx
-        #print(idx.size())
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size+self.config.register_token, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -289,10 +305,7 @@ class GPT(nn.Module):
         
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        #print(tok_emb.size())
-        #print("Token embedding size:", self.transformer.wte.weight.size())  # Confirm token embedding size
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        #print(pos_emb.size())
         x = self.transformer.drop(tok_emb + pos_emb)
        
         for block in self.transformer.h:
@@ -451,3 +464,5 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+    
+

@@ -262,10 +262,14 @@ if question_number == 1:
     csv_file_path = 'losses_data_q1.csv'
 if question_number == 2:
     csv_file_path = 'losses_data_q2.csv'
+if question_number == 3:
+    csv_file_path = 'losses_data_q3.csv'
 if question_number == 4:
     csv_file_path = 'losses_data_q4.csv'
 if question_number == 45 or question_number == 25 or question_number == 5:
     csv_file_path = 'losses_data_q5.csv'
+if question_number == 61 or question_number == 62:
+    csv_file_path = 'losses_data_q6.csv'
     
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
@@ -289,16 +293,17 @@ while True:
             data = zip([str(interest_ratio)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
         if question_number == 2:
             data = zip([str(sliding_window_size)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
+        if question_number == 3:
+            data = zip([str(revisedMLP)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
         if question_number == 4:
             data = zip([str(register_token)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
         if question_number == 45 or question_number == 25 or question_number == 5:
             test_info = str(sliding_window_size)+str(register_token)
             data = zip([str(test_info)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
+        if question_number == 61 or question_number == 62:
+            test_info = str(question_number)
+            data = zip([str(test_info)], [str(iter_num)], [str(round(losses['train'].item(), 3))], [str(round(losses['val'].item(), 3))])
             
-        
-        
-
-
         # Check if the CSV file exists
         file_exists = os.path.exists(csv_file_path)
 
@@ -311,10 +316,14 @@ while True:
                 first_column = 'Interest Ratio'
             if  question_number == 2:
                 first_column = 'Sliding window size'
+            if  question_number == 3:
+                first_column = 'Revised MLP'
             if  question_number == 4:
                 first_column = 'Register token number'
             if question_number == 45 or question_number == 25 or question_number == 5:
                 first_column = 'Tested condition'
+            if question_number == 61 or question_number == 62:
+                first_column = 'Revised softmax'
 
             if not file_exists:
                 writer.writerow([first_column, 'Iteration Number', 'Training Loss', 'Validation Loss'])
