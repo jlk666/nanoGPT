@@ -20,3 +20,5 @@ do
     echo "Testing sliding window size $size"
     python train.py config/train_shakespeare_char.py --device=mps --compile=False --eval_iters=250 --log_interval=10 --block_size=100 --batch_size=12 --n_layer=4 --n_head=6 --n_embd=384 --max_iters=5000 --lr_decay_iters=2000 --dropout=0.0 --interest_ratio=100 --sliding_window=True --sliding_window_size=$size --question_number=2
 done
+
+python q2_plot.py

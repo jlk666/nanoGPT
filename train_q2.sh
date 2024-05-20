@@ -38,4 +38,4 @@ for ratio in "${ratios[@]}"; do
     eval $full_command
 done
 
-echo "All training runs completed."
+python q1_plot.py

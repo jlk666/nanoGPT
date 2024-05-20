@@ -17,4 +17,4 @@ echo "Testing with customized softmax"
 echo "Testing with register default model"
     python train.py config/train_shakespeare_char.py --device=mps --compile=False --eval_iters=250 --log_interval=10 --block_size=100 --batch_size=12 --n_layer=4 --n_head=6 --n_embd=384 --max_iters=5000 --lr_decay_iters=2000 --dropout=0.0 --interest_ratio=64 --sliding_window=False --sliding_window_size=0 --revisedMLP=False --register_token=0 --question_number=62
 
-#python q6_plot.py
+python q6_plot.py
